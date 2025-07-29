@@ -4,6 +4,7 @@ import { db } from "./config/db.js";
 import { favoritesTable } from "./db/schema.js";
 import { and, eq } from "drizzle-orm";
 import job from "./config/cron.js";
+import { migrate } from "drizzle-orm/neon-http/migrator";
 
 const app = express();
 const PORT = ENV.PORT || 5001;
@@ -11,6 +12,34 @@ const PORT = ENV.PORT || 5001;
 if (ENV.NODE_ENV === "production") job.start();
 
 app.use(express.json());
+
+// Migration runner function
+const runMigrations = async () => {
+  try {
+    console.log('🔄 Running database migrations...');
+    
+    await migrate(db, {
+      migrationsFolder: './migrations',
+    });
+    
+    console.log('✅ Database migrations completed successfully');
+    
+    // Test that the table exists after migration
+    const testResult = await db.select().from(favoritesTable).limit(1);
+    console.log('✅ Favorites table is accessible');
+    
+  } catch (error) {
+    console.error('❌ Migration error:', error.message);
+    console.error('Full error:', error);
+    
+    // In production, don't crash the server, but log the error
+    if (ENV.NODE_ENV === 'production') {
+      console.error('⚠️  Continuing without migrations in production');
+    } else {
+      throw error;
+    }
+  }
+};
 
 app.get("/api/health", (req, res) => {
   res.status(200).json({ success: true });
@@ -76,6 +105,29 @@ app.delete("/api/favorites/:userId/:recipeId", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log("Server is running on PORT:", PORT);
-});
+// Start server with migrations
+const startServer = async () => {
+  try {
+    // Run migrations first
+    await runMigrations();
+    
+    // Then start the server
+    app.listen(PORT, () => {
+      console.log("Server is running on PORT:", PORT);
+    });
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    
+    // In production, try to start anyway
+    if (ENV.NODE_ENV === 'production') {
+      console.log('⚠️  Starting server despite migration issues...');
+      app.listen(PORT, () => {
+        console.log("Server is running on PORT:", PORT, "(with migration warnings)");
+      });
+    } else {
+      process.exit(1);
+    }
+  }
+};
+
+startServer();
