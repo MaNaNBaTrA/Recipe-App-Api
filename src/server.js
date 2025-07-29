@@ -5,6 +5,12 @@ import { favoritesTable } from "./db/schema.js";
 import { and, eq } from "drizzle-orm";
 import job from "./config/cron.js";
 import { migrate } from "drizzle-orm/neon-http/migrator";
+import { sql } from "drizzle-orm";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = ENV.PORT || 5001;
@@ -18,8 +24,12 @@ const runMigrations = async () => {
   try {
     console.log('🔄 Running database migrations...');
     
+    // Fix: Point to the correct folder where your migrations are
+    const migrationsFolder = path.resolve(__dirname, 'db', 'migrations');
+    console.log('Migrations folder path:', migrationsFolder);
+    
     await migrate(db, {
-      migrationsFolder: './migrations',
+      migrationsFolder: migrationsFolder,
     });
     
     console.log('✅ Database migrations completed successfully');
@@ -32,11 +42,35 @@ const runMigrations = async () => {
     console.error('❌ Migration error:', error.message);
     console.error('Full error:', error);
     
-    // In production, don't crash the server, but log the error
-    if (ENV.NODE_ENV === 'production') {
-      console.error('⚠️  Continuing without migrations in production');
-    } else {
-      throw error;
+    // Fallback: Try to create the table directly if migration fails
+    try {
+      console.log('🔄 Attempting direct table creation...');
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "favorites" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "user_id" text NOT NULL,
+          "recipe_id" integer NOT NULL,
+          "title" text NOT NULL,
+          "image" text,
+          "cook_time" text,
+          "servings" text,
+          "created_at" timestamp DEFAULT now()
+        );
+      `);
+      
+      // Test the table
+      await db.select().from(favoritesTable).limit(1);
+      console.log('✅ Direct table creation successful');
+      
+    } catch (fallbackError) {
+      console.error('❌ Direct table creation also failed:', fallbackError.message);
+      
+      // In production, don't crash the server, but log the error
+      if (ENV.NODE_ENV === 'production') {
+        console.error('⚠️ Continuing without migrations in production');
+      } else {
+        throw error;
+      }
     }
   }
 };
@@ -120,7 +154,7 @@ const startServer = async () => {
     
     // In production, try to start anyway
     if (ENV.NODE_ENV === 'production') {
-      console.log('⚠️  Starting server despite migration issues...');
+      console.log('⚠️ Starting server despite migration issues...');
       app.listen(PORT, () => {
         console.log("Server is running on PORT:", PORT, "(with migration warnings)");
       });
